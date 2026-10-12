@@ -12,16 +12,21 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import json
 import logging
 import threading
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
+
+import torch
 
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from torch.distributed._collective_annotations import CollectiveMetadata
     from torch.utils.hooks import RemovableHandle
 
 
@@ -374,6 +379,35 @@ class CuspyObserver:
             yield ext_id
         finally:
             self.pop_annotation()
+
+    def _push_collective_kernel_metadata(self, metadata: CollectiveMetadata) -> None:
+        """Attach a collective's ``record_param_comms`` fields to the kernels it
+        launches. Cuspy doesn't see ``record_param_comms``, so c10d calls this from a
+        pre-hook (see ``register_collective_annotation_hooks`` in
+        ``torch.distributed._collective_annotations``).
+
+        Pushes a new external correlation id and keys ``metadata`` on it, so the
+        fields land on every kernel this thread launches until the matching
+        :meth:`_pop_collective_kernel_metadata`. The kernels keep the name of their
+        enclosing ``record_function`` scope: name resolution walks up from the
+        unnamed collective id.
+        """
+        cuspy = self._cuspy
+        if not self.available or cuspy is None:
+            return
+        ext_id = cuspy.push_external_correlation_id()
+        if ext_id is None:
+            # Cuspy is not started; the matching pop no-ops too. A profiler problem
+            # must not fail the collective, so skip its annotation.
+            warnings.warn(
+                "Cuspy could not push an external correlation id; collective kernels "
+                "will not carry collective metadata",
+                stacklevel=2,
+            )
+            return
+        torch._C._profiler._cuspy.metadata_put_external(json.dumps(metadata), ext_id)
+
+    _pop_collective_kernel_metadata = pop_annotation
 
     def annotation_names(self, *, reset: bool = False) -> dict[int, str]:
         """Snapshot of the ``external_id -> name`` map pushed so far; pass
