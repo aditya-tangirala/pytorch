@@ -160,7 +160,7 @@ def _default_custom_combo_kernel_horizontal_partition(
     The default algorithm is to partition nodes based on the following rules:
         1) nodes with the same number of block dimensions are grouped together.
         2) large pointwise nodes (numels greater than LARGE_NUMELS) are separated from other nodes.
-        3) large reduce nodes are separated from other nodes.
+        3) large reduce nodes (numel * rnumel greater than LARGE_NUMELS) are separated from other nodes.
         4) without per-subkernel blocks, persistent and non-persistent reduce nodes are
            separated from each other.
     """
@@ -191,7 +191,7 @@ def _default_custom_combo_kernel_horizontal_partition(
         short_reduction = [n for n in reduction if n not in long_reduction]
         very_large_reduction = [
             n
-            for n in long_reduction
+            for n in reduction
             if (
                 V.graph.sizevars.optimization_hint(node_info_map[n].numel, fallback=1)
                 * V.graph.sizevars.optimization_hint(
@@ -201,6 +201,7 @@ def _default_custom_combo_kernel_horizontal_partition(
             > LARGE_NUMELS
         ]
         long_reduction = [n for n in long_reduction if n not in very_large_reduction]
+        short_reduction = [n for n in short_reduction if n not in very_large_reduction]
         if long_reduction:
             _log_partition_separation(
                 "ComboKernels: %d long reduction nodes are separated",
